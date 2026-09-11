@@ -59,11 +59,12 @@ async def search(fake: FakeEna, **kwargs):
 
 
 @pytest.mark.anyio
-async def test_country_filter_builds_prefix_query_and_counts_same_query():
+async def test_country_filter_builds_exact_query_and_counts_same_query():
     fake = FakeEna(httpx.Response(200, json=ROWS), count_text="count\n5120\n")
     result = await search(fake, country="United Kingdom", limit=2)
 
-    expected_query = 'tax_tree(9913) AND country="United Kingdom*"'
+    # Regression: live ENA returns 0 for 'country="United Kingdom*"', so no wildcard is sent.
+    expected_query = 'tax_tree(9913) AND country="United Kingdom"'
     assert fake.search_params["query"] == expected_query
     assert fake.search_params["result"] == "sample"
     assert fake.search_params["format"] == "json"
@@ -100,7 +101,7 @@ async def test_quotes_and_wildcards_are_stripped_from_country():
     fake = FakeEna(httpx.Response(200, json=[]))
     await search(fake, country='Kenya" OR tax_eq(1)*')
 
-    assert fake.search_params["query"] == 'tax_tree(9913) AND country="Kenya OR tax_eq(1)*"'
+    assert fake.search_params["query"] == 'tax_tree(9913) AND country="Kenya OR tax_eq(1)"'
 
 
 @pytest.mark.anyio

@@ -12,12 +12,14 @@ An MCP server that lets LLM clients ask questions about public genomics data in 
 |---|---|
 | `count_records` | "How many cattle sequencing runs are in ENA?" |
 | `search_samples` | "Show me cattle samples collected in the United Kingdom" |
+| `get_biosample` | "What tissue and breed is sample SAMEA7658521?" |
+| `check_sample_metadata` | "Is this sample's metadata complete enough for FAANG?" |
 
 ## Run locally
 
 ```bash
 uv sync
 uv run pytest
-uv run python scripts/smoke_live.py   # live check against ENA
+uv run python scripts/smoke_live.py   # live check against ENA and BioSamples
 uv run ena-mcp                        # start the MCP server (stdio)
 ```

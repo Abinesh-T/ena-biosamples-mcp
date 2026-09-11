@@ -11,6 +11,7 @@ dist/
 # Local config and logs
 .env
 *.log
+smoke_output.txt
 nohup.out
 
 # IDE / OS

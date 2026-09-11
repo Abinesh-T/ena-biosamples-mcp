@@ -99,3 +99,43 @@ async def test_network_error_is_wrapped():
 
     with pytest.raises(EnaApiError, match="Could not reach ENA"):
         await run_count(handler)
+
+
+GENUS_FIRST = [
+    {"taxId": "9903", "scientificName": "Bos", "commonName": "cattle", "rank": "genus"},
+    {"taxId": "9913", "scientificName": "Bos taurus", "commonName": "cattle", "rank": "species"},
+]
+
+
+async def resolve(matches: list[dict], name: str):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=matches)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        return await EnaService(client, PORTAL, TAXONOMY).resolve_taxon(name)
+
+
+@pytest.mark.anyio
+async def test_common_name_prefers_species_over_genus():
+    # Regression: live ENA resolved "cattle" to the genus Bos (9903) instead of Bos taurus.
+    taxon = await resolve(GENUS_FIRST, "cattle")
+
+    assert taxon.tax_id == "9913"
+    assert taxon.other_matches == ["Bos (9903, genus)"]
+
+
+@pytest.mark.anyio
+async def test_exact_scientific_name_wins_even_for_genus():
+    taxon = await resolve(GENUS_FIRST, "bos")
+    assert taxon.tax_id == "9903"
+    assert taxon.other_matches == ["Bos taurus (9913, species)"]
+
+
+@pytest.mark.anyio
+async def test_genus_match_carries_a_note_but_species_does_not():
+    # Live ENA resolves "cattle" to the genus Bos only, so the client must be told.
+    genus = await resolve([GENUS_FIRST[0]], "cattle")
+    species = await resolve([GENUS_FIRST[1]], "Bos taurus")
+
+    assert genus.note is not None and "genus" in genus.note
+    assert species.note is None

@@ -30,6 +30,12 @@ SAMPLE_FIELDS: dict[str, str] = {
 }
 MAX_SEARCH_LIMIT = 100
 
+# Ranks above species: results then cover many species, which the client should know.
+HIGHER_RANKS = {
+    "subgenus", "genus", "tribe", "subfamily", "family", "superfamily",
+    "order", "class", "phylum", "kingdom", "superkingdom", "domain",
+}
+
 
 class EnaApiError(Exception):
     """Raised when ENA is unreachable or returns an unexpected response."""
@@ -40,6 +46,9 @@ class Taxon(BaseModel):
     scientific_name: str
     common_name: str | None = None
     rank: str | None = None
+    # Other taxa that matched the same name, e.g. "Bos (9903, genus)", so clients can clarify.
+    other_matches: list[str] = []
+    note: str | None = None
 
 
 class RecordCount(BaseModel):
@@ -108,14 +117,19 @@ class EnaService:
         if not isinstance(matches, list) or not matches:
             raise EnaApiError(f"No taxon found for '{name}'.")
 
-        if len(matches) > 1:
-            logger.info("Multiple taxa matched; using the first", extra={"name": name})
-        first = matches[0]
+        best = _pick_best_taxon(name, matches)
+        others = [m for m in matches if m is not best]
+        if others:
+            logger.info("Multiple taxa matched", extra={"name": name, "chosen": best["taxId"]})
         return Taxon(
-            tax_id=str(first["taxId"]),
-            scientific_name=first["scientificName"],
-            common_name=first.get("commonName"),
-            rank=first.get("rank"),
+            tax_id=str(best["taxId"]),
+            scientific_name=best["scientificName"],
+            common_name=best.get("commonName"),
+            rank=best.get("rank"),
+            other_matches=[
+                f"{m['scientificName']} ({m['taxId']}, {m.get('rank') or 'unranked'})" for m in others
+            ],
+            note=_rank_note(best),
         )
 
     async def count_records(
@@ -146,7 +160,7 @@ class EnaService:
 
         Args:
             species: Scientific or common name.
-            country: Country name, e.g. "United Kingdom". Matched as a prefix.
+            country: Country name, e.g. "United Kingdom". Exact, case-insensitive match.
             limit: Max samples to return (1-100). The total match count is always returned.
             include_subspecies: Include subspecies and breeds under the taxon.
 
@@ -157,8 +171,9 @@ class EnaService:
         country_filter = _clean_country(country)
         query = _taxon_query(taxon.tax_id, include_subspecies)
         if country_filter:
-            # INSDC stores locations as "Country:region", so match the country as a prefix.
-            query += f' AND country="{country_filter}*"'
+            # Exact match on purpose: live ENA returns 0 for a trailing wildcard on multi-word
+            # values ('country="United Kingdom*"') but 5,188 cattle samples for the exact name.
+            query += f' AND country="{country_filter}"'
 
         page_size = max(1, min(limit, MAX_SEARCH_LIMIT))
         response = await self._get(
@@ -204,6 +219,32 @@ class EnaService:
         except httpx.HTTPError as exc:
             logger.warning("ENA request failed", extra={"url": url, "error": str(exc)})
             raise EnaApiError(f"Could not reach ENA: {exc}") from exc
+
+
+def _pick_best_taxon(name: str, matches: list[dict]) -> dict:
+    """Choose the taxon a researcher most likely means.
+
+    Common names are ambiguous: "cattle" matches both the genus Bos and the species
+    Bos taurus, and ENA may list the genus first. Prefer an exact scientific-name match,
+    then a species, then ENA's own ordering.
+    """
+    lowered = name.lower()
+    exact = [m for m in matches if str(m.get("scientificName", "")).lower() == lowered]
+    if exact:
+        return exact[0]
+    species = [m for m in matches if m.get("rank") == "species"]
+    return species[0] if species else matches[0]
+
+
+def _rank_note(match: dict) -> str | None:
+    rank = match.get("rank")
+    if rank not in HIGHER_RANKS:
+        return None
+    # e.g. ENA resolves "cattle" to the genus Bos, which also covers yak, zebu and gaur.
+    return (
+        f"'{match['scientificName']}' is a {rank}, so results include every species under it. "
+        "Use a species name (e.g. 'Bos taurus') to narrow down."
+    )
 
 
 def _taxon_query(tax_id: str, include_subspecies: bool) -> str:
