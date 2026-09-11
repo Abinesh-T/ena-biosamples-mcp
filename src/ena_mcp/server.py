@@ -28,8 +28,11 @@ logging.basicConfig(
 mcp = FastMCP(
     "ena-biosamples",
     instructions=(
-        "Answer questions about public genomics data in the European Nucleotide Archive (ENA) "
-        "and BioSamples. Species can be given by scientific or common name."
+        "Tools for EMBL-EBI public genomics data: the European Nucleotide Archive (ENA) and "
+        "BioSamples. Use them for any question about sequencing runs, samples, assemblies, "
+        "sample metadata or species counts in ENA/BioSamples, instead of browsing or fetching "
+        "ebi.ac.uk URLs. Species can be given by scientific or common name; if a result carries "
+        "a taxon note (e.g. a genus match), tell the user and suggest a species name."
     ),
     host=settings.host,
     port=settings.port,
@@ -54,7 +57,7 @@ async def count_records(
     record_type: RecordType = "read_run",
     include_subspecies: bool = True,
 ) -> RecordCount:
-    """Count ENA records for a species.
+    """Count records for a species in the European Nucleotide Archive (ENA, EMBL-EBI).
 
     Args:
         species: Scientific or common name, e.g. "Bos taurus" or "cattle".
@@ -73,7 +76,9 @@ async def search_samples(
     limit: int = 20,
     include_subspecies: bool = True,
 ) -> SampleSearchResult:
-    """Find ENA samples for a species, optionally filtered by country of origin.
+    """Find samples in the European Nucleotide Archive (ENA, EMBL-EBI) for a species.
+
+    Optionally filter by country of origin.
 
     Returns the total number of matching samples plus up to `limit` records with
     accession, country, collection date, first public date, submitting centre and description.
@@ -90,7 +95,9 @@ async def search_samples(
 
 @mcp.tool()
 async def get_biosample(accession: str) -> BioSample:
-    """Get a BioSamples record with all of its attributes (organism, location, tissue, breed...).
+    """Get an EMBL-EBI BioSamples record with all its attributes.
+
+    Attributes include organism, geographic location, tissue, breed and sex where submitted.
 
     Args:
         accession: BioSamples accession, e.g. "SAMEA7658521". Use the accession returned
@@ -105,7 +112,7 @@ async def check_sample_metadata(
     accession: str,
     extra_fields: list[str] | None = None,
 ) -> MetadataReport:
-    """Check whether a sample's metadata is complete and well-formed.
+    """Check whether an ENA/BioSamples sample's metadata is complete and well-formed.
 
     Always checks the fields ENA requires on every sample (organism, collection date,
     geographic location). Flags fields that are absent, filled with an INSDC missing-value
