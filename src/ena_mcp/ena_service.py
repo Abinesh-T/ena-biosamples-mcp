@@ -18,6 +18,18 @@ RecordType = Literal["read_run", "sample", "assembly"]
 
 USER_AGENT = "ena-biosamples-mcp/0.1 (+https://github.com/Abinesh-T/ena-biosamples-mcp)"
 
+# ENA returns these columns for each sample; keys map 1:1 to SampleSummary fields.
+SAMPLE_FIELDS: dict[str, str] = {
+    "sample_accession": "accession",
+    "scientific_name": "scientific_name",
+    "country": "country",
+    "collection_date": "collection_date",
+    "first_public": "first_public",
+    "center_name": "center_name",
+    "description": "description",
+}
+MAX_SEARCH_LIMIT = 100
+
 
 class EnaApiError(Exception):
     """Raised when ENA is unreachable or returns an unexpected response."""
@@ -35,6 +47,25 @@ class RecordCount(BaseModel):
     record_type: RecordType
     count: int
     include_subspecies: bool
+    query: str
+
+
+class SampleSummary(BaseModel):
+    accession: str
+    scientific_name: str | None = None
+    country: str | None = None
+    collection_date: str | None = None
+    first_public: str | None = None
+    center_name: str | None = None
+    description: str | None = None
+
+
+class SampleSearchResult(BaseModel):
+    taxon: Taxon
+    country_filter: str | None
+    total_matching: int
+    returned: int
+    samples: list[SampleSummary]
     query: str
 
 
@@ -95,25 +126,77 @@ class EnaService:
     ) -> RecordCount:
         """Count ENA records of one type for a species."""
         taxon = await self.resolve_taxon(species)
+        query = _taxon_query(taxon.tax_id, include_subspecies)
+        return RecordCount(
+            taxon=taxon,
+            record_type=record_type,
+            count=await self._count(record_type, query),
+            include_subspecies=include_subspecies,
+            query=query,
+        )
 
-        # tax_tree also counts subspecies and breeds registered under the taxon; tax_eq is exact.
-        operator = "tax_tree" if include_subspecies else "tax_eq"
-        query = f"{operator}({taxon.tax_id})"
+    async def search_samples(
+        self,
+        species: str,
+        country: str | None = None,
+        limit: int = 20,
+        include_subspecies: bool = True,
+    ) -> SampleSearchResult:
+        """Find samples for a species, optionally filtered by country.
+
+        Args:
+            species: Scientific or common name.
+            country: Country name, e.g. "United Kingdom". Matched as a prefix.
+            limit: Max samples to return (1-100). The total match count is always returned.
+            include_subspecies: Include subspecies and breeds under the taxon.
+
+        Returns:
+            Total matching samples plus up to `limit` sample records.
+        """
+        taxon = await self.resolve_taxon(species)
+        country_filter = _clean_country(country)
+        query = _taxon_query(taxon.tax_id, include_subspecies)
+        if country_filter:
+            # INSDC stores locations as "Country:region", so match the country as a prefix.
+            query += f' AND country="{country_filter}*"'
+
+        page_size = max(1, min(limit, MAX_SEARCH_LIMIT))
         response = await self._get(
-            f"{self._portal_url}/count", params={"result": record_type, "query": query}
+            f"{self._portal_url}/search",
+            params={
+                "result": "sample",
+                "query": query,
+                "fields": ",".join(SAMPLE_FIELDS),
+                "limit": str(page_size),
+                "format": "json",
+            },
+        )
+        if response.status_code not in (200, 204):
+            raise EnaApiError(
+                f"ENA sample search failed ({response.status_code}): {response.text[:200]}"
+            )
+
+        samples = [_to_sample(row) for row in _json_rows(response)]
+        # The page is capped, so tell the client how many samples exist in total.
+        total = await self._count("sample", query)
+        return SampleSearchResult(
+            taxon=taxon,
+            country_filter=country_filter,
+            total_matching=total,
+            returned=len(samples),
+            samples=samples,
+            query=query,
+        )
+
+    async def _count(self, result: str, query: str) -> int:
+        response = await self._get(
+            f"{self._portal_url}/count", params={"result": result, "query": query}
         )
         if response.status_code != 200:
             raise EnaApiError(
                 f"ENA count failed ({response.status_code}): {response.text[:200]}"
             )
-
-        return RecordCount(
-            taxon=taxon,
-            record_type=record_type,
-            count=_parse_count(response.text),
-            include_subspecies=include_subspecies,
-            query=query,
-        )
+        return _parse_count(response.text)
 
     async def _get(self, url: str, params: dict[str, str] | None = None) -> httpx.Response:
         try:
@@ -121,6 +204,40 @@ class EnaService:
         except httpx.HTTPError as exc:
             logger.warning("ENA request failed", extra={"url": url, "error": str(exc)})
             raise EnaApiError(f"Could not reach ENA: {exc}") from exc
+
+
+def _taxon_query(tax_id: str, include_subspecies: bool) -> str:
+    # tax_tree also matches subspecies and breeds registered under the taxon; tax_eq is exact.
+    operator = "tax_tree" if include_subspecies else "tax_eq"
+    return f"{operator}({tax_id})"
+
+
+def _clean_country(country: str | None) -> str | None:
+    """Strip characters that would break out of the quoted ENA query value."""
+    if country is None:
+        return None
+    cleaned = country.replace('"', "").replace("*", "").strip()
+    return cleaned or None
+
+
+def _json_rows(response: httpx.Response) -> list[dict]:
+    # ENA sends an empty body (sometimes 204) when nothing matches.
+    if response.status_code == 204 or not response.text.strip():
+        return []
+    try:
+        rows = response.json()
+    except ValueError as exc:
+        raise EnaApiError(f"Unexpected search response from ENA: {response.text[:100]}") from exc
+    if not isinstance(rows, list):
+        raise EnaApiError("Unexpected search response from ENA: expected a list.")
+    return rows
+
+
+def _to_sample(row: dict) -> SampleSummary:
+    # ENA uses "" for missing values; normalise to None so clients see real gaps.
+    values = {model_key: (row.get(ena_key) or None) for ena_key, model_key in SAMPLE_FIELDS.items()}
+    values["accession"] = values["accession"] or ""
+    return SampleSummary(**values)
 
 
 def _parse_count(body: str) -> int:

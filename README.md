@@ -11,6 +11,7 @@ An MCP server that lets LLM clients ask questions about public genomics data in 
 | Tool | What it answers |
 |---|---|
 | `count_records` | "How many cattle sequencing runs are in ENA?" |
+| `search_samples` | "Show me cattle samples collected in the United Kingdom" |
 
 ## Run locally
 

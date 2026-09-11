@@ -16,6 +16,9 @@ async def main() -> None:
             result = await service.count_records("cattle", record_type)
             print(result.model_dump_json(indent=2))
 
+        search = await service.search_samples("cattle", country="United Kingdom", limit=3)
+        print(search.model_dump_json(indent=2))
+
 
 if __name__ == "__main__":
     asyncio.run(main())

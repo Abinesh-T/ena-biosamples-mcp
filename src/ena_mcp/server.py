@@ -8,7 +8,13 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 
 from ena_mcp.config import settings
-from ena_mcp.ena_service import EnaService, RecordCount, RecordType, create_http_client
+from ena_mcp.ena_service import (
+    EnaService,
+    RecordCount,
+    RecordType,
+    SampleSearchResult,
+    create_http_client,
+)
 
 # The stdio transport uses stdout for protocol messages, so logs must go to stderr.
 logging.basicConfig(
@@ -50,6 +56,28 @@ async def count_records(
     async with ena_service() as service:
         return await service.count_records(species, record_type, include_subspecies)
 
+
+
+@mcp.tool()
+async def search_samples(
+    species: str,
+    country: str | None = None,
+    limit: int = 20,
+    include_subspecies: bool = True,
+) -> SampleSearchResult:
+    """Find ENA samples for a species, optionally filtered by country of origin.
+
+    Returns the total number of matching samples plus up to `limit` records with
+    accession, country, collection date, first public date, submitting centre and description.
+
+    Args:
+        species: Scientific or common name, e.g. "Bos taurus" or "cattle".
+        country: Country name, e.g. "United Kingdom" or "Kenya". Omit for all countries.
+        limit: Max samples to return (1-100). Default 20.
+        include_subspecies: Also include subspecies and breeds under this taxon.
+    """
+    async with ena_service() as service:
+        return await service.search_samples(species, country, limit, include_subspecies)
 
 def main() -> None:
     mcp.run(transport=settings.transport)
